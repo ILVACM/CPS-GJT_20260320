@@ -1,0 +1,11 @@
+{
+  "unit_name": "node-detect-inference",
+  "description": "检测节点 钢筋直径推理服务",
+  "exec_start": "/opt/node_detect/.venv/bin/python /opt/node_detect/main.py run",
+  "working_directory": "/opt/node_detect",
+  "restart": "on-failure",
+  "restart_sec": 5,
+  "user": "root",
+  "after": "network.target",
+  "wanted_by": "multi-user.target"
+}

@@ -1,0 +1,2 @@
+2026-07-31 10:16:25.935 | INFO    | A | node_a | 日志初始化完成: D:\swap\CPS-GJT_20260320\DEMO\node_a\logs\node_a_test2.log (级别=DEBUG, 轮转=10MB × 5)
+2026-07-31 10:16:25.935 | INFO    | A | test_logger | logger_format_check

@@ -1,0 +1,46 @@
+# ============================================================
+# 钢筋直径测量设备项目 - .gitignore
+# 对齐 AGENTS.md §7.6（归档管理）与 §8.4（模型资产不入版本控制）
+# ============================================================
+
+# ---- Python 字节码缓存（自动生成，不入版本控制）----
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ---- 运行时日志（部署后自动生成）----
+node_detect/logs/*.log
+node_detect/logs/*.log.*
+node_server/logs/*.log
+node_server/logs/*.log.*
+
+# ---- 模型权重（按 AGENTS.md §8.4，部署时按需获取，不入代码目录）----
+node_detect/weights/*.pth
+node_detect/weights/*.pt
+node_detect/weights/*.onnx
+
+# ---- 推理结果（运行时产物，按 project_memory 路径 ./result/{YYYYMMDD-HHMMSS}/）----
+node_server/result/
+
+# ---- IDE 元数据 ----
+.trae/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ---- 操作系统杂项 ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- 临时与备份文件 ----
+*.tmp
+*.bak
+*~
+*.orig
+
+# ---- proto 编译产物（保留源 .proto，编译产物可重新生成）----
+# 注：当前 node_detect/proto/ 与 node_server/proto/ 中的 *_pb2.py / *_pb2_grpc.py
+# 属于编译产物，但为方便部署暂保留入版本控制；后续若提取共享 proto，
+# 可改为编译时生成并加入 .gitignore

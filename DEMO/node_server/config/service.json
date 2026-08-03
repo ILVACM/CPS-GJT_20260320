@@ -1,0 +1,7 @@
+{
+  "service_name": "rebar-node-server",
+  "exec_start": "/opt/node_server/.venv/bin/python /opt/node_server/main.py",
+  "working_directory": "/opt/node_server",
+  "user": "root",
+  "restart": "always"
+}

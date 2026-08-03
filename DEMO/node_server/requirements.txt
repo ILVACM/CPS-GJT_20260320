@@ -1,0 +1,6 @@
+opencv-python>=4.5.0
+pyserial>=3.5
+Pillow>=8.0.0
+grpcio>=1.50.0
+protobuf>=4.21.0
+numpy>=1.21.0

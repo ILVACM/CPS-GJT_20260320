@@ -1,0 +1,4 @@
+﻿图片名称,钢筋编号,检测直径(mm),相邻区间,检测间距(mm)
+result.jpg,H1,12,-,-
+result.jpg,H2,12,H1~H2,150.2
+result.jpg,H3,12,H2~H3,149.8

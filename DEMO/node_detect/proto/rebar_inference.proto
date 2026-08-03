@@ -1,0 +1,93 @@
+syntax = "proto3";
+
+package rebar.inference;
+
+/**
+ * 钢筋直径测量设备 — gRPC 服务定义
+ *
+ * 本文件严格遵循 AGENTS.md §5.5 冻结版本，禁止随意修改字段。
+ *
+ * 服务拓扑（双节点各监听 50051，独立 channel）：
+ *   - 检测节点 的 server: 提供 Infer RPC（服务节点 调用 → S→D 方向）
+ *   - 服务节点 的 server: 提供 Heartbeat + Shutdown RPC（检测节点 调用 → D→S 方向）
+ *   - 检测节点 同时作为 gRPC 客户端，周期调用服务节点 的 Heartbeat 并在退出时调用 Shutdown
+ */
+
+// ============================================================
+// 服务定义
+// ============================================================
+
+service RebarInference {
+  // 推理请求（S→D）：服务节点 发送 JPEG 帧，检测节点 返回 PNG 类别掩码
+  rpc Infer(InferRequest) returns (InferResponse);
+
+  // 心跳保活（D→S）：检测节点 周期性推送存活性探测
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+  // 退出通知（D→S）：检测节点 退出前一次性通知服务节点（best-effort）
+  rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
+}
+
+// ============================================================
+// 业务 RPC：Infer
+// ============================================================
+
+message InferRequest {
+  bytes image = 1;                 // JPEG 编码的 RGB 帧
+  uint32 frame_id = 2;             // 帧序号（单调递增），帧同步主键
+  int64 timestamp_ms = 3;          // 采集时刻时间戳（毫秒），帧同步辅助校验
+  double camera_distance_mm = 4;   // 拍摄距离标量（激光测距值），随帧绑定
+}
+
+message InferResponse {
+  bytes label_mask = 1;        // PNG 编码的单通道 0/1/2 类别掩码
+  uint32 frame_id = 2;         // 回传请求 frame_id，帧同步主键
+  int64 timestamp_ms = 3;      // 回传请求时间戳，供帧同步校验
+  uint32 width = 4;            // 掩码宽（与原图一致）
+  uint32 height = 5;           // 掩码高（与原图一致）
+  NodeStatus status = 6;       // 节点当前状态（闲/忙/退出中）— 状态捎带
+}
+
+// ============================================================
+// 心跳 RPC：Heartbeat
+// ============================================================
+
+message HeartbeatRequest {
+  string node_id = 1;          // 节点标识 "node-detect"（便于未来多节点扩展）
+  int64 timestamp_ms = 2;      // 发送时刻（毫秒时间戳）
+  NodeStatus status = 3;       // 节点当前工作状态
+  uint32 infer_count = 4;      // 累计推理成功次数（监控用，可选）
+  uint32 last_infer_duration_ms = 5;  // 最近一次推理耗时毫秒（性能观测，可选）
+}
+
+message HeartbeatResponse {
+  bool accepted = 1;           // 服务端是否受理
+  int64 server_timestamp_ms = 2;  // 服务端接收时刻（时钟漂移校验）
+}
+
+// ============================================================
+// 退出通知 RPC：Shutdown
+// ============================================================
+
+message ShutdownRequest {
+  string node_id = 1;           // 节点标识 "node-detect"
+  int64 timestamp_ms = 2;       // 发送时刻（毫秒时间戳）
+  NodeStatus status = 3;        // 终态状态（应为 NODE_STATUS_SHUTTING_DOWN）
+  string reason = 4;            // 退出原因（可选，如 "SIGTERM" / "exception" / "manual"）
+}
+
+message ShutdownResponse {
+  bool acknowledged = 1;        // 服务端是否确认收到（A 侧不消费此值）
+  int64 server_timestamp_ms = 2;// 服务端接收时刻
+}
+
+// ============================================================
+// 枚举：节点工作状态
+// ============================================================
+
+enum NodeStatus {
+  NODE_STATUS_UNKNOWN = 0;       // 未知（默认值）
+  NODE_STATUS_IDLE = 1;          // 空闲：等待推理请求
+  NODE_STATUS_BUSY = 2;          // 推理中：前向推理占用 GPU
+  NODE_STATUS_SHUTTING_DOWN = 3; // 退出中：正在清理，不再接新任务
+}

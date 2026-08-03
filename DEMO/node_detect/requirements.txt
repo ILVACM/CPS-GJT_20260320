@@ -1,0 +1,22 @@
+# 检测节点（Jetson Nano, Ubuntu 22.04）专属依赖清单
+# 与服务节点的 requirements.txt 物理隔离
+
+# ---- 深度学习框架 ----
+# 注意：Jetson 上必须使用 NVIDIA 官方 PyTorch wheel（匹配 JetPack CUDA）
+# 安装指南：https://docs.nvidia.com/deeplearning/frameworks/install-pytorch-jetson-platform/index.html
+torch>=2.0.0
+torchvision>=0.15.0
+
+# ---- gRPC ----
+grpcio>=1.50.0
+grpcio-tools>=1.50.0
+
+# ---- 图像处理 ----
+opencv-python-headless>=4.5.0  # headless 版本节省 Jetson 显存
+Pillow>=9.0.0
+
+# ---- 数值计算 ----
+numpy>=1.21.0
+
+# ---- 开发环境（可选）----
+# pytest>=7.0.0  # 单元测试（原型阶段不使用）
