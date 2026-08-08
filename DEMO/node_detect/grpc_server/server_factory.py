@@ -45,7 +45,7 @@ class GRPCServer:
 
     def __init__(
         self,
-        predictor: RebarPredictor,
+        predictor: Optional[RebarPredictor],
         listen_address: str,
         state_machine: StateMachine,
         max_workers: int = 4,
@@ -54,7 +54,7 @@ class GRPCServer:
         初始化 gRPC 服务器。
 
         Args:
-            predictor: 已加载权重的推理器实例
+            predictor: 已加载权重的推理器实例（可为 None — 节点以降级模式运行，gRPC 仍启动但推理返回空）
             listen_address: 监听地址（如 "0.0.0.0:50051"）
             state_machine: 状态机实例
             max_workers: 线程池大小（原型阶段 4 工作线程）

@@ -13,6 +13,7 @@ node_detect/logs/*.log
 node_detect/logs/*.log.*
 node_server/logs/*.log
 node_server/logs/*.log.*
+node_server/logs/*.jsonl
 
 # ---- 模型权重（按 AGENTS.md §8.4，部署时按需获取，不入代码目录）----
 node_detect/weights/*.pth

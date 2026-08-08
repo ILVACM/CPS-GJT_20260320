@@ -27,8 +27,12 @@ set -euo pipefail
 # ------------------------------------------------------------------------------
 INSTALL_DIR="/opt/node_server"
 SERVICE_NAME="rebar-node-server"
-PYTHON_VERSION="3.10"
+PYTHON_VERSION="/usr/bin/python3"
 LOG_PREFIX="[deploy_node_server]"
+
+# 脚本与项目目录（提前定义，供步骤 4.5 udev 安装等早期步骤使用）
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 # 颜色输出
 RED='\033[0;31m'
@@ -252,6 +256,8 @@ cleanup() {
         log_error "  3. 确认已安装 GUI 桌面环境（project_memory 硬约束）"
         log_error "  4. 相机与 S21C 串口需人工插入，脚本不自动检测外设"
         log_error "  5. 若包名不存在，用 dnf provides <libxxx.so> 或 apt-file search <libxxx.so> 查找"
+        log_error "  6. pyorbbecsdk wheel 需人工放置到 source/ 目录（P1/K4）"
+        log_error "  7. udev 规则安装失败时手动执行：bash source/install_udev_rules.sh"
     fi
     exit $exit_code
 }
@@ -404,10 +410,13 @@ fi
 log_warn "⚠️ 用户组改动需重新登录后生效"
 log_warn "   部署完成后请退出当前会话并重新登录"
 
-# 4.3 加载 ch341 内核驱动（CH9102 串口芯片）
-if ! lsmod | grep -q "ch341"; then
-    log_info "加载 ch341 内核驱动..."
-    modprobe ch341 2>/dev/null || log_warn "ch341 驱动加载失败，首次插入 S21C 时再确认"
+# 4.3 加载 ch341 / cdc_acm 内核驱动（CH9102 串口芯片）
+#     CH9102 在 CDC ACM 模式下由 cdc_acm 驱动（节点 /dev/ttyACM*），
+#     在 UART 模式下由 ch341 驱动（节点 /dev/ttyUSB*），两种均需支持
+if ! lsmod | grep -qE "ch341|cdc_acm"; then
+    log_info "加载 ch341 / cdc_acm 内核驱动..."
+    modprobe ch341 2>/dev/null || log_warn "ch341 驱动加载失败"
+    modprobe cdc_acm 2>/dev/null || log_warn "cdc_acm 驱动加载失败，首次插入 S21C 时再确认"
 fi
 
 # 4.4 配置 GDK_BACKEND（Wayland 兼容 tkinter）
@@ -416,24 +425,92 @@ if ! grep -q "GDK_BACKEND=x11" /etc/environment; then
     log_info "✓ 已配置 GDK_BACKEND=x11 到 /etc/environment"
 fi
 
-# ==============================================================================
-# 步骤 5：安装 uv 工具链
-# ==============================================================================
-log_step "步骤 5/10：安装 uv 工具链"
-
-# 检查是否已安装
-if command -v uv &> /dev/null; then
-    UV_VERSION=$(uv --version | awk '{print $2}')
-    log_info "✓ uv 已安装：$UV_VERSION"
+# 4.5 安装 Orbbec udev 规则（P1/F2/A15）
+#     Gemini 336L 等 Orbbec USB 设备需 udev 规则赋予 video 组读写权限，
+#     否则 pyorbbecsdk Pipeline 打开设备时无权限。
+#     install_udev_rules.sh 内部已执行 udevadm control --reload + udevadm trigger（R7）
+log_info "安装 Orbbec udev 规则（USB 设备权限）..."
+UDEV_INSTALL_SCRIPT="$PROJECT_DIR/source/install_udev_rules.sh"
+if [[ -f "$UDEV_INSTALL_SCRIPT" ]]; then
+    chmod +x "$UDEV_INSTALL_SCRIPT"
+    bash "$UDEV_INSTALL_SCRIPT"
+    log_info "✓ Orbbec udev 规则已安装到 /etc/udev/rules.d/99-obsensor-libusb.rules"
 else
-    log_info "通过官方脚本安装 uv..."
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    export PATH="$HOME/.local/bin:$PATH"
-    if ! command -v uv &> /dev/null; then
-        log_error "uv 安装失败"
-        exit 1
+    log_warn "⚠️ 未找到 install_udev_rules.sh，跳过 udev 规则安装"
+    log_warn "   部署后请手动执行：bash source/install_udev_rules.sh"
+fi
+
+# ==============================================================================
+# 步骤 5：安装 uv 工具链（按需安装，已存在则跳过）
+# ==============================================================================
+log_step "步骤 5/10：uv 工具链（按需安装，已存在则跳过）"
+
+# 5.1 主动扩展 PATH：将 uv 可能的安装路径加入 PATH（解决 sudo 环境 PATH 重置问题）
+#     sudo 执行时 HOME=/root 且 PATH 不含 per-user bin 目录，导致 command -v uv 误判
+#     即使 .bashrc 中有 export PATH=...，非交互 shell 也不会 source .bashrc
+_REAL_HOME="$HOME"
+# 尝试获取真实用户的 HOME（若通过 sudo 运行）
+if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+    _REAL_HOME=$(getent passwd "${SUDO_USER}" 2>/dev/null | cut -d: -f6)
+    [[ -z "$_REAL_HOME" ]] && _REAL_HOME="$HOME"
+fi
+log_info "当前 HOME=$HOME, SUDO_USER=${SUDO_USER:-（无）}, REAL_HOME=$_REAL_HOME"
+
+# 构建 uv 可能存在的所有路径列表
+_UV_PATHS=()
+for _h in "$HOME" "$_REAL_HOME"; do
+    _UV_PATHS+=("$_h/.local/bin")
+    _UV_PATHS+=("$_h/.cargo/bin")
+done
+# 去重并加入 PATH
+for _p in "${_UV_PATHS[@]}"; do
+    if [[ -d "$_p" && ":$PATH:" != *":$_p:"* ]]; then
+        export PATH="$_p:$PATH"
     fi
-    log_info "✓ uv 安装完成：$(uv --version)"
+done
+
+# 5.2 检测 uv 是否已可用（command -v + 实际可执行验证）
+if command -v uv &>/dev/null && uv --version &>/dev/null; then
+    UV_VERSION=$(uv --version | awk '{print $2}')
+    log_info "✓ 检测到已有 uv (v${UV_VERSION})，跳过安装"
+else
+    # 5.3 command -v 失败时，再用文件路径兜底检查（uv 可能已安装但不在 PATH 中）
+    _UV_FOUND=""
+    for _p in "${_UV_PATHS[@]}"; do
+        if [[ -x "$_p/uv" ]]; then
+            _UV_FOUND="$_p/uv"
+            break
+        fi
+    done
+
+    if [[ -n "$_UV_FOUND" ]]; then
+        UV_VERSION=$("$_UV_FOUND" --version | awk '{print $2}')
+        log_info "✓ 在 PATH 之外找到 uv: $_UV_FOUND (v${UV_VERSION})，已加入 PATH"
+    else
+        # 5.4 确实未安装，执行官方安装
+        log_info "未检测到 uv，通过官方脚本安装..."
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+
+        # 安装后：确保 uv 在 PATH 中可用（官方脚本默认安装到 ~/.local/bin）
+        for _p in "${_UV_PATHS[@]}"; do
+            if [[ -d "$_p" && ":$PATH:" != *":$_p:"* ]]; then
+                export PATH="$_p:$PATH"
+            fi
+        done
+
+        # 验证安装成功
+        if command -v uv &>/dev/null && uv --version &>/dev/null; then
+            UV_VERSION=$(uv --version | awk '{print $2}')
+            log_info "✓ uv 安装完成：v${UV_VERSION}"
+        else
+            log_error "uv 安装失败：安装脚本已执行但 command -v uv 找不到"
+            log_error "  请手动排查："
+            log_error "    1. 检查 ~/.local/bin 或 ~/.cargo/bin 是否存在 uv 可执行文件"
+            log_error "    2. 尝试重新登录/重开 shell 后再次运行脚本"
+            log_error "    3. 手动安装：curl -LsSf https://astral.sh/uv/install.sh | sh"
+            exit 1
+        fi
+    fi
 fi
 
 # uv 镜像源：默认尊重系统/uv 现有配置；--aliyun 时已在 setup_aliyun_mirror() 中临时 export
@@ -448,8 +525,7 @@ fi
 # ==============================================================================
 log_step "步骤 6/10：部署项目代码到 $INSTALL_DIR"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+# SCRIPT_DIR / PROJECT_DIR 已在全局变量段定义（供步骤 4.5 udev 安装等早期步骤使用）
 
 mkdir -p "$INSTALL_DIR"
 log_info "复制项目文件..."
@@ -463,20 +539,73 @@ log_info "✓ 代码已部署到 $INSTALL_DIR"
 cd "$INSTALL_DIR"
 
 # ==============================================================================
-# 步骤 7：创建 uv 虚拟环境并安装依赖
+# 步骤 7：创建 uv 虚拟环境（强制覆盖重建）并安装依赖
 # ==============================================================================
-log_step "步骤 7/10：创建 uv 虚拟环境并安装依赖"
+log_step "步骤 7/10：创建 uv 虚拟环境（强制覆盖重建）并安装依赖"
 
-log_info "创建 Python $PYTHON_VERSION 虚拟环境..."
-uv venv --python "$PYTHON_VERSION"
-log_info "✓ 虚拟环境已创建：$INSTALL_DIR/.venv"
+# 校验系统 Python 版本（确保是 3.9.x，openEuler 22.03 SP4 默认）
+SYSTEM_PY_VERSION=$(/usr/bin/python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+if [[ "$SYSTEM_PY_VERSION" != "3.9" ]]; then
+    log_error "系统 Python 版本为 $SYSTEM_PY_VERSION，期望 3.9.x（openEuler 22.03 SP4 默认）"
+    log_error "若系统 Python 非 3.9，请确认发行版版本或手动安装 Python 3.9"
+    exit 1
+fi
+log_info "系统 Python 版本：$SYSTEM_PY_VERSION（✓ 符合要求）"
+
+# 清理 uv 缓存的 python-build-standalone 3.10（确保设备内无 3.10 痕迹）
+log_info "清理 uv 缓存的 Python 3.10（若存在）..."
+uv python uninstall 3.10 2>/dev/null || true
+log_info "✓ uv Python 缓存已清理"
+
+# 1.2 强制覆盖重建：无条件删除已有 .venv 目录并重新创建（移除人工确认交互）
+log_info "强制覆盖重建 uv 虚拟环境: $INSTALL_DIR/.venv"
+if [[ -d "$INSTALL_DIR/.venv" ]]; then
+    log_warn "⚠️ 检测到已存在的 .venv 目录，正在强制删除并重建..."
+    rm -rf "$INSTALL_DIR/.venv"
+    log_info "  已删除旧环境：$INSTALL_DIR/.venv"
+fi
+# 双重保险：使用 --clear 参数让 uv 强制清除残留（无交互）
+uv venv --python "$PYTHON_VERSION" --clear
+log_info "✓ 虚拟环境已重建：$INSTALL_DIR/.venv（Python $SYSTEM_PY_VERSION）"
 
 log_info "安装 Python 依赖（uv sync）..."
 log_warn "⚠️ 如卡死在 opencv 编译，请确认 §1.3 系统依赖已装"
 log_warn "   可临时改用 opencv-python-headless（但 GUI 显示会受影响）"
 
+# 校验 pyproject.toml 存在（uv 项目模式必需）
+if [[ ! -f "$INSTALL_DIR/pyproject.toml" ]]; then
+    log_error "pyproject.toml 不存在：$INSTALL_DIR/pyproject.toml"
+    log_error "请确认部署代码完整（含 pyproject.toml 与 requirements.txt）"
+    exit 1
+fi
+
 uv sync
-log_info "✓ Python 依赖安装完成"
+log_info "✓ Python 依赖安装完成（uv.lock 已生成/更新）"
+
+# 7.1 安装 pyorbbecsdk 本地 wheel（P1/K4/A16）
+#     pyorbbecsdk 无 PyPI 发布，仅有 Linux ARM64 wheel；
+#     不入 pyproject.toml dependencies 避免非 ARM64 环境解析失败（K4）。
+#     wheel 文件由人工部署前放置到 source/ 目录（假设 A1）。
+log_info "安装 pyorbbecsdk 本地 wheel（Linux ARM64 专用）..."
+WHEEL_FILE="$INSTALL_DIR/source/pyorbbecsdk2-2.1.1-cp39-cp39-linux_aarch64.whl"
+if [[ ! -f "$WHEEL_FILE" ]]; then
+    # 兼容：部署前 wheel 可能在项目源目录
+    WHEEL_FILE="$PROJECT_DIR/source/pyorbbecsdk2-2.1.1-cp39-cp39-linux_aarch64.whl"
+fi
+if [[ -f "$WHEEL_FILE" ]]; then
+    uv pip install "$WHEEL_FILE"
+    # 冒烟测试：验证 import 成功
+    if uv run python -c "import pyorbbecsdk; print('pyorbbecsdk version:', pyorbbecsdk.__version__)" 2>/dev/null; then
+        log_info "✓ pyorbbecsdk 安装成功并可导入"
+    else
+        log_warn "⚠️ pyorbbecsdk 已安装但 import 失败（R1：可能与系统 Python 3.9 libusb/Tcl-Tk 不兼容）"
+        log_warn "   回退方案：Orbbec336LInput 懒导入会自动退化为不可用（D3），相机功能暂不可用"
+    fi
+else
+    log_warn "⚠️ 未找到 pyorbbecsdk wheel 文件：$WHEEL_FILE"
+    log_warn "   部署前请将 wheel 文件放置到 source/ 目录（假设 A1）"
+    log_warn "   缺失时 Orbbec336LInput 不可用（D3 懒导入会安全降级）"
+fi
 
 # ==============================================================================
 # 步骤 8：编译 proto 文件
@@ -486,13 +615,16 @@ log_step "步骤 8/10：编译 proto 文件"
 cd "$INSTALL_DIR"
 
 log_info "使用 uv run 调用 grpcio-tools 编译 proto..."
+# 关键：--proto_path=. 让 protoc 把项目根作为 proto path，utils/proto/rebar_inference.proto
+# 处于 utils.proto 子包下，protoc 识别 proto 为包，生成的 _pb2_grpc.py 用包内导入
+# （from . import 或 from utils.proto import），而非裸 import rebar_inference_pb2
 uv run python -m grpc_tools.protoc \
-    --proto_path=proto \
-    --python_out=proto \
-    --grpc_python_out=proto \
-    proto/rebar_inference.proto
+    --proto_path=. \
+    --python_out=. \
+    --grpc_python_out=. \
+    utils/proto/rebar_inference.proto
 
-if [[ ! -f proto/rebar_inference_pb2.py || ! -f proto/rebar_inference_pb2_grpc.py ]]; then
+if [[ ! -f utils/proto/rebar_inference_pb2.py || ! -f utils/proto/rebar_inference_pb2_grpc.py ]]; then
     log_error "proto 编译失败：未生成 _pb2.py 文件"
     exit 1
 fi
@@ -509,10 +641,14 @@ log_warn "部署完成后请："
 log_warn "  1. 插入 Orbbec Gemini 336L 相机（USB）"
 log_warn "  2. 插入 S21C 主控板（Type-C 串口，CH9102 芯片）"
 log_warn "  3. 确认设备节点："
-log_warn "     ls /dev/video*    # 相机"
-log_warn "     ls /dev/ttyUSB*   # 串口"
-log_warn "  4. 确认 ch341 驱动加载："
-log_warn "     lsmod | grep ch341"
+log_warn "     ls /dev/video*             # 相机"
+log_warn "     ls /dev/ttyUSB* /dev/ttyACM*  # 串口（CH9102 可能为 ttyUSB 或 ttyACM）"
+log_warn "  4. 确认 ch341 / cdc_acm 驱动加载："
+log_warn "     lsmod | grep -E 'ch341|cdc_acm'"
+log_warn "  5. 确认 Orbbec udev 规则已安装（P1/F2）："
+log_warn "     ls /etc/udev/rules.d/99-obsensor-libusb.rules"
+log_warn "  6. 确认 pyorbbecsdk 已安装（P1/K4）："
+log_warn "     cd $INSTALL_DIR && .venv/bin/python -c 'import pyorbbecsdk; print(pyorbbecsdk.__version__)'"
 
 # ==============================================================================
 # 步骤 10：注册 systemd 服务并启动
@@ -562,24 +698,28 @@ echo "   - Orbbec Gemini 336L 相机（USB）"
 echo "   - S21C 主控板（Type-C 串口）"
 echo ""
 echo "3. 确认外设识别："
-echo "   ls /dev/video*      # 相机"
-echo "   ls /dev/ttyUSB*      # 串口"
-echo "   lsmod | grep ch341   # ch341 驱动"
+echo "   ls /dev/video*                # 相机"
+echo "   ls /dev/ttyUSB* /dev/ttyACM*  # 串口（CH9102 可能为 ttyUSB 或 ttyACM）"
+echo "   lsmod | grep -E 'ch341|cdc_acm'  # ch341 / cdc_acm 驱动"
 echo ""
-echo "4. 查看服务状态："
+echo "4. 确认 Orbbec udev 规则与 pyorbbecsdk（P1）："
+echo "   ls /etc/udev/rules.d/99-obsensor-libusb.rules  # udev 规则"
+echo "   cd $INSTALL_DIR && .venv/bin/python -c 'import pyorbbecsdk; print(pyorbbecsdk.__version__)'"
+echo ""
+echo "5. 查看服务状态："
 echo "   sudo systemctl status $SERVICE_NAME"
 echo ""
-echo "5. 查看实时日志："
+echo "6. 查看实时日志："
 echo "   sudo journalctl -u $SERVICE_NAME -f"
 echo "   sudo tail -f $INSTALL_DIR/logs/node_server.log"
 echo ""
-echo "6. 环境自检（独立验证）："
+echo "7. 环境自检（独立验证）："
 echo "   cd $INSTALL_DIR && sudo uv run main.py self-check"
 echo ""
-echo "7. 前台调试模式（可选）："
+echo "8. 前台调试模式（可选）："
 echo "   sudo systemctl stop $SERVICE_NAME"
 echo "   cd $INSTALL_DIR && sudo uv run main.py"
 echo ""
-echo "8. 五项自检脚本（相机/串口/GUI/通信/推理测量）："
+echo "9. 五项自检脚本（相机/串口/GUI/通信/推理测量）："
 echo "   cd $INSTALL_DIR && sudo uv run python test_node_server.py"
 echo ""

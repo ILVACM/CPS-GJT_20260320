@@ -1,0 +1,10 @@
+{
+  "service_name": "node-detect-inference",
+  "exec_start": "/opt/node_detect/.venv/bin/python /opt/node_detect/main.py run",
+  "working_directory": "/opt/node_detect",
+  "user": "root",
+  "restart": "on-failure",
+  "environment": "PYTHONPATH=/opt/node_detect",
+  "after": "network.target",
+  "wanted_by": "multi-user.target"
+}

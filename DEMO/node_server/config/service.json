@@ -3,5 +3,6 @@
   "exec_start": "/opt/node_server/.venv/bin/python /opt/node_server/main.py",
   "working_directory": "/opt/node_server",
   "user": "root",
-  "restart": "always"
+  "restart": "always",
+  "environment": "PYTHONPATH=/opt/node_server DISPLAY=:1 XAUTHORITY=/run/user/1200/gdm/Xauthority"
 }

@@ -1,7 +1,9 @@
 {
-  "local_ip": "192.168.10.2",
-  "remote_ip": "192.168.10.1",
+  "local_ip": "192.168.1.234",
+  "remote_ip": "192.168.1.10",
   "grpc_port": 50051,
   "heartbeat_interval_seconds": 5,
-  "heartbeat_timeout_count": 3
+  "heartbeat_timeout_count": 3,
+  "network_interface": "",
+  "netmask": "255.255.255.0"
 }

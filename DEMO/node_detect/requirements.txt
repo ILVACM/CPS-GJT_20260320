@@ -1,11 +1,18 @@
 # 检测节点（Jetson Nano, Ubuntu 22.04）专属依赖清单
 # 与服务节点的 requirements.txt 物理隔离
+#
+# 双轨兼容：本文件与 pyproject.toml 同步维护
+#   - pyproject.toml 为主入口，被 `uv sync` 读取（生成 uv.lock 保证可复现构建）
+#   - 本文件为辅，供人工临时安装：`uv pip install -r requirements.txt`
+#
+# 维护约定：修改依赖时必须同步更新 pyproject.toml 的 [project.dependencies]
 
 # ---- 深度学习框架 ----
-# 注意：Jetson 上必须使用 NVIDIA 官方 PyTorch wheel（匹配 JetPack CUDA）
-# 安装指南：https://docs.nvidia.com/deeplearning/frameworks/install-pytorch-jetson-platform/index.html
-torch>=2.0.0
-torchvision>=0.15.0
+# Jetson ARM64 必须使用 NVIDIA 官方 PyTorch wheel（匹配 JetPack CUDA），非 PyPI 通用包
+# 安装由 deploy_node_detect.sh 步骤 6 自动处理：whl 位于 node_detect/source/torch-*-cp310-cp310-linux_aarch64.whl
+# 参考：https://docs.nvidia.com/deeplearning/frameworks/install-pytorch-jetson-platform/index.html
+# torch>=2.0.0
+# torchvision>=0.15.0
 
 # ---- gRPC ----
 grpcio>=1.50.0
@@ -16,7 +23,8 @@ opencv-python-headless>=4.5.0  # headless 版本节省 Jetson 显存
 Pillow>=9.0.0
 
 # ---- 数值计算 ----
-numpy>=1.21.0
+# PyTorch 2.5 whl 用 NumPy 1.x 编译，NumPy 2.x ABI 不兼容会报 _ARRAY_API not found
+numpy>=1.21.0,<2.0.0
 
 # ---- 开发环境（可选）----
 # pytest>=7.0.0  # 单元测试（原型阶段不使用）

@@ -32,34 +32,35 @@ import numpy as np
 import cv2
 
 # ---- 服务节点 模块导入 ----
-from common.config_loader import (
+from utils.common.config_loader import (
     CameraConfig,
     InferenceConfig,
     IntrinsicsConfig,
     NetworkConfig,
+    SerialConfig,
 )
-from common.constants import (
+from utils.common.constants import (
     SERIAL_FRAME_HEADER,
     SERIAL_FRAME_TAIL,
     SegClass,
 )
-from camera.mock import MockCameraInput
-from camera.scanner import LocalCameraScanner
-from serial.serial_buffer import SerialBuffer
-from serial.laser_parser import LaserDataParser
-from measure.intrinsics_manager import IntrinsicsManager
-from measure.rebar_measure import RebarMeasure, MeasureResult
-from storage.result_store import ResultStore
-from system.node_monitor import NodeMonitor
-from system.exit_coordinator import ExitCoordinator
+from utils.camera.mock import MockCameraInput
+from utils.camera.scanner import LocalCameraScanner
+from utils.serial.serial_buffer import SerialBuffer
+from utils.serial.laser_parser import LaserDataParser
+from utils.measure.intrinsics_manager import IntrinsicsManager
+from utils.measure.rebar_measure import RebarMeasure, MeasureResult
+from utils.storage.result_store import ResultStore
+from utils.system.node_monitor import NodeMonitor
+from utils.system.exit_coordinator import ExitCoordinator
 
 # gRPC 相关
 import grpc
 from concurrent.futures import ThreadPoolExecutor
-from proto import rebar_inference_pb2
-from proto import rebar_inference_pb2_grpc
-from grpc_client.inference_client import InferenceGrpcClient, InferenceResult
-from grpc_client.grpc_server import GrpcServerB
+from utils.proto import rebar_inference_pb2
+from utils.proto import rebar_inference_pb2_grpc
+from utils.grpc_client.inference_client import InferenceGrpcClient, InferenceResult
+from utils.grpc_client.grpc_server import GrpcServerB
 
 
 # ==================================================================
@@ -238,7 +239,7 @@ def check_gui() -> Tuple[ bool, str]:
     root = None
     try:
         import tkinter as tk
-        from ui.app import RebarMeasureApp
+        from utils.ui.app import RebarMeasureApp
 
         root = tk.Tk()
         root.withdraw()  # 不显示窗口（自检无需可视化）
@@ -250,6 +251,7 @@ def check_gui() -> Tuple[ bool, str]:
         camera_cfg: CameraConfig = CameraConfig()
         intrinsics_cfg: IntrinsicsConfig = IntrinsicsConfig()
         inference_cfg: InferenceConfig = InferenceConfig()
+        serial_cfg: SerialConfig = SerialConfig()
 
         # NodeMonitor / GrpcServerB 不启动（仅构造）
         monitor: NodeMonitor = NodeMonitor()
@@ -264,6 +266,7 @@ def check_gui() -> Tuple[ bool, str]:
             camera_cfg=camera_cfg,
             intrinsics_cfg=intrinsics_cfg,
             inference_cfg=inference_cfg,
+            serial_cfg=serial_cfg,
             node_monitor=monitor,
             grpc_server=grpc_server,
             degraded=True,  # 降级模式避免连接推理端

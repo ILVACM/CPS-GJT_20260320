@@ -1,5 +1,5 @@
 {
-  "model_path": "D:/swap/CPS-GJT_20260320/DEMO/logs/Unet_resnet50.pth",
+  "model_path": "weights/Unet_resnet50.pth",
   "input_width": 640,
   "input_height": 640,
   "use_cuda": true,

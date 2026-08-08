@@ -1,13 +1,15 @@
 """
 启动环境自检 — 程序启动时一次性执行的启动门控。
 
-遵循 AGENTS.md §4.3 自检规范：
-  - 本机 IP 校验、端口可用性：**硬故障** → 异常 → 安全退出
-  - CUDA 设备：硬故障 → 异常
-  - 模型权重可读：硬故障 → 异常
+遵循 AGENTS.md §4.3 自检规范（诊断模式）：
+  - 本机 IP 校验：**诊断模式** → 仅记录日志 + 修复指引，不阻塞启动；运行期由 NetworkMonitor 动态跟踪
+  - 端口可用性：**硬故障** → 异常 → 安全退出（端口被占则服务无法运行）
+  - CUDA 设备：**硬故障** → 异常 → 安全退出（Jetson 上 CUDA 为必需）
+  - 模型权重可读：**硬故障** → 异常 → 安全退出
   - 非 Windows 环境才检查 root 权限
 
-自检必须在 UI 启动之前在 main.py 同步执行，不通过则**严禁带病运行**。
+自检必须在 UI / gRPC server 启动之前在 main.py 同步执行。
+诊断项（IP）不阻塞；硬故障项（端口/CUDA/权重）不通过则**严禁带病运行**。
 """
 
 import logging
@@ -34,10 +36,9 @@ class SelfCheckResult:
 
     @property
     def all_ok(self) -> bool:
-        """全部通过（忽略非关键的 admin_privilege 在开发环境下 True 占位）"""
+        """硬故障项全部通过（IP 不纳入，按 AGENTS.md §4.3 诊断模式处理）"""
         return (
-            self.local_ip_ok
-            and self.port_available
+            self.port_available
             and self.cuda_available
             and self.weight_readable
         )
@@ -184,11 +185,15 @@ def run_self_check(
         tag = "OK" if result.admin_privilege else "跳过"
         logger.info(f"[自检] 管理员权限: {tag}")
 
-    # ---- 2. 本机 IP ----
+    # ---- 2. 本机 IP（诊断模式，不阻塞启动；对齐 AGENTS.md §4.3） ----
     result.local_ip_ok = _check_local_ip(config.local_ip)
     if not result.local_ip_ok:
-        result.errors.append(f"本机 IP 校验失败: {config.local_ip}")
-        logger.error(f"[自检] 本机 IP 校验失败: {config.local_ip}")
+        # IP 不匹配仅记录错误与修复指引；运行期由 NetworkMonitor 动态跟踪
+        logger.error(f"[自检] 本机 IP 不匹配（诊断模式，不阻塞启动）: 期望 {config.local_ip}")
+        logger.error("[自检] 修复指引：")
+        logger.error("  1. sudo bash /opt/node_detect/scripts/setup_network.sh    # 自动配置静态 IP")
+        logger.error("  2. 或手工校对 /opt/node_detect/config/network.json 的 local_ip")
+        logger.error("  3. 运行期 NetworkMonitor 会持续探测配置正确性")
     else:
         logger.info(f"[自检] 本机 IP: {config.local_ip} OK")
 

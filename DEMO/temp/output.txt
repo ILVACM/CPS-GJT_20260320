@@ -1,0 +1,55 @@
+[openEuler@openEuler node_server]$ sudo bash /home/workarea/verify_xauth.sh 
+==============================================================
+X Server 授权验证测试
+执行时间: 2026-08-04 14:59:44
+==============================================================
+
+========== 1. 前置检查 ==========
+[1.1] 当前用户:
+用户id=0(root) 组id=0(root) 组=0(root)
+
+[1.2] X Server 套接字:
+总用量 0
+drwxrwxrwt  2 root      root       60  1月  1  1970 .
+drwxrwxrwt 13 root      root      420  8月  4 14:46 ..
+srwxrwxrwx  1 openEuler openEuler   0  1月  1  1970 X1
+
+[1.3] GDM Xauthority 文件（关键）:
+  路径: /run/user/1200/gdm/Xauthority
+  权限: -rwx------ 1 openEuler openEuler 106  1月  1  1970 /run/user/1200/gdm/Xauthority
+  属主: openEuler:openEuler
+  root 可读: 是
+
+[1.4] Python venv 路径:
+  /opt/node_server/.venv/bin/python → Python 3.9.9
+
+========== 2. 核心验证测试 ==========
+[2.1] 测试1: 仅 DISPLAY=:1（预期失败）
+  命令: env -i DISPLAY=:1 /opt/node_server/.venv/bin/python -c 'import tkinter; ...'
+No protocol specified
+
+No protocol specified
+
+Traceback (most recent call last):
+  预期: No protocol specified（root 被 xhost 拒绝）
+
+[2.2] 测试2: DISPLAY=:1 + XAUTHORITY（关键测试）
+  命令: env -i DISPLAY=:1 XAUTHORITY=/run/user/1200/gdm/Xauthority /opt/node_server/.venv/bin/python -c 'import tkinter; ...'
+  → OK：root 通过 cookie 授权成功连接 X Server
+
+  ✓✓✓ 验证通过 ✓✓✓
+  → 方案 A 可行：service.json 加 DISPLAY=:1 XAUTHORITY=/run/user/1200/gdm/Xauthority
+
+  建议的 service.json environment 字段:
+    "environment": "PYTHONPATH=/opt/node_server DISPLAY=:1 XAUTHORITY=/run/user/1200/gdm/Xauthority"
+
+========== 3. 进阶测试（完整 GUI 窗口） ==========
+[3.1] 尝试启动完整 tk 窗口（3 秒后自动关闭）
+  命令: env -i DISPLAY=:1 XAUTHORITY=/run/user/1200/gdm/Xauthority /opt/node_server/.venv/bin/python -c '...mainloop()...'
+  → 窗口正常显示并关闭
+
+==============================================================
+验证完成。
+若 [2.2] 显示 OK，请将结果发回，据此修改 service.json
+==============================================================
+

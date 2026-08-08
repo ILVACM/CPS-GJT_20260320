@@ -1,0 +1,26 @@
+[project]
+name = "node-detect"
+version = "0.1.0"
+description = "钢筋直径测量设备 - 检测节点（AI 推理）"
+requires-python = ">=3.9"
+dependencies = [
+    # 注：Jetson 上 torch/torchvision 必须使用 NVIDIA 官方 wheel（PyPI 默认 wheel 不含 CUDA，且 cu13x 版本要求驱动 > 12060）
+    # 为杜绝 `uv sync` 从 PyPI 拉取 2.13+cu130 覆盖 Jetson whl、形成"双源竞争"，此处 torch / torchvision 统一注释。
+    # Jetson whl 由 scripts/deploy_node_detect.sh 步骤 6 通过 `uv pip install whl` 显式安装，是 .venv 中 torch 的唯一来源。
+    # 非 Jetson（开发机 / CI）欲使用 torch，需自行 `pip install torch`（双轨兼容）。
+    # 同步约定：requirements.txt L11-L15 也已注释 torch/torchvision（保持双轨对齐）。
+    # "torch>=2.0.0",
+    # "torchvision>=0.15.0",
+    "grpcio>=1.50.0",
+    "grpcio-tools>=1.50.0",
+    "opencv-python-headless>=4.5.0",
+    "Pillow>=9.0.0",
+    "numpy>=1.21.0,<2.0.0",  # PyTorch 2.5 whl 用 NumPy 1.x 编译；NumPy 2.x ABI 不兼容会导致 torch 初始化报 "_ARRAY_API not found"
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["inference", "grpc_client", "grpc_server", "proto", "system"]

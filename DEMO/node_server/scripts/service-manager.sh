@@ -32,6 +32,7 @@ EXEC_START="$(python3 -c "import json;print(json.load(open('$CONFIG_PATH'))['exe
 WORKING_DIRECTORY="$(python3 -c "import json;print(json.load(open('$CONFIG_PATH'))['working_directory'])")"
 SERVICE_USER="$(python3 -c "import json;print(json.load(open('$CONFIG_PATH'))['user'])")"
 RESTART_POLICY="$(python3 -c "import json;print(json.load(open('$CONFIG_PATH'))['restart'])")"
+SERVICE_ENVIRONMENT="$(python3 -c "import json;print(json.load(open('$CONFIG_PATH')).get('environment', ''))")"
 
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
@@ -43,11 +44,17 @@ do_install() {
     echo "  User            = ${SERVICE_USER}"
     echo "  Restart         = ${RESTART_POLICY}"
 
+    # 可选 Environment 行（仅当 service.json 配置了 environment 字段时生成）
+    ENV_LINE=""
+    if [[ -n "$SERVICE_ENVIRONMENT" ]]; then
+        ENV_LINE="Environment=${SERVICE_ENVIRONMENT}"
+    fi
+
     # 生成 systemd unit 文件（INI 格式，AGENTS.md §7.1 例外）
     cat > "$UNIT_FILE" <<EOF
 [Unit]
 Description=Rebar Node Server Service (钢筋直径测量设备 - 服务节点)
-After=network.target
+After=network.target display-manager.service
 
 [Service]
 Type=simple
@@ -58,9 +65,10 @@ Restart=${RESTART_POLICY}
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
+${ENV_LINE}
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=graphical.target
 EOF
 
     echo "unit 文件已生成: ${UNIT_FILE}"

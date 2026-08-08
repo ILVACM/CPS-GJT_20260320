@@ -74,19 +74,94 @@ class RebarPredictor:
 
         # ---- 模型加载 ----
         self._model = UNetModel(num_classes=NUM_CLASSES)
+        self._degraded: bool = False       # 降级标志：模型权重部分加载失败时置 True
+        self._degraded_reason: str = ""    # 降级原因（供日志与 journalctl 排查）
         try:
             state_dict = torch.load(self._model_path, map_location=self._device)
-            self._model.load_state_dict(state_dict)
+            state_dict = self._migrate_legacy_state_dict_keys(state_dict)
+            # strict=False：允许迁移后仍有个别不匹配（人工接管源头修复前保持服务可启动）
+            missing_keys, unexpected_keys = self._model.load_state_dict(
+                state_dict, strict=False
+            )
+            if missing_keys:
+                logger.warning(f"state_dict 缺 key: {missing_keys[:5]}{'...' if len(missing_keys) > 5 else ''}")
+                self._degraded = True
+                self._degraded_reason = f"缺 {len(missing_keys)} 个权重 key"
+            if unexpected_keys:
+                logger.warning(f"state_dict 多余 key（已忽略）: {unexpected_keys[:5]}{'...' if len(unexpected_keys) > 5 else ''}")
         except FileNotFoundError:
             logger.critical(f"权重文件未找到: {self._model_path}")
             raise
-        except RuntimeError as e:
-            logger.critical(f"权重加载失败（结构不匹配）: {e}")
-            raise
+        except Exception as e:
+            logger.error(f"模型加载异常（进入降级模式）: {e}", exc_info=True)
+            self._degraded = True
+            self._degraded_reason = f"load 异常: {type(e).__name__}: {e}"
 
         self._model.to(self._device)
         self._model.eval()
-        logger.info(f"模型加载成功: {self._model_path} ({NUM_CLASSES} 类)")
+        if self._degraded:
+            logger.warning(f"模型进入降级模式（仍可启动，推理请求将返回 None）: {self._degraded_reason}")
+        else:
+            logger.info(f"模型加载成功: {self._model_path} ({NUM_CLASSES} 类)")
+
+    @staticmethod
+    def _migrate_legacy_state_dict_keys(state_dict: dict) -> dict:
+        """
+        兼容迁移旧版权重（new-predict.py 训练的权重）到当前 model.py 命名。
+
+        旧版命名：
+          - up_concat{N}.conv1.{weight|bias}
+          - up_concat{N}.conv2.{weight|bias}
+          - up_conv.{1|3}.bias   (nn.Conv2d，带 bias=True)
+
+        当前命名（model.py）：
+          - up{N}.conv.{0|2}.weight   (nn.Sequential，Conv2d + ReLU + Conv2d + ReLU)
+          - up_conv.{1|3}.weight       (同上，bias=False)
+
+        处理规则：
+          1. up_concat{N}.conv1.weight → up{N}.conv.0.weight
+          2. up_concat{N}.conv2.weight → up{N}.conv.2.weight
+          3. 含 bias 且目标层 bias=False 的 key 丢弃（load_state_dict strict=False 已兜底，此处显式丢弃更干净）
+          4. up_conv.{1|3}.bias → 丢弃（当前模型 bias=False）
+          5. 其他 key 保持不变（resnet encoder / bn / runtime keys 等）
+
+        返回新 state_dict（原 dict 不修改，避免副作用）。
+        """
+        migrated = {}
+        for key, value in state_dict.items():
+            new_key = key
+
+            # 规则 4：丢弃 up_conv 的 bias（新模型 bias=False）
+            if new_key.startswith("up_conv.") and new_key.endswith(".bias"):
+                logger.debug(f"[兼容迁移] 丢弃旧权重的 bias 项: {key}")
+                continue
+
+            # 规则 1/2：重命名 up_concatN.conv{M} → upN.conv.{idx}
+            if new_key.startswith("up_concat"):
+                # 提取 N：up_concat{N}.xxx → up{N}.xxx
+                head, _, rest = new_key.partition(".")
+                idx = head[len("up_concat"):]
+                new_key = f"up{idx}.{rest}" if rest else f"up{idx}"
+
+                # conv1 → conv.0，conv2 → conv.2
+                if ".conv1." in new_key:
+                    new_key = new_key.replace(".conv1.", ".conv.0.")
+                elif ".conv2." in new_key:
+                    new_key = new_key.replace(".conv2.", ".conv.2.")
+
+                # 含 bias 的 up_concatN 项在新模型中无对应（bias=False），丢弃
+                if new_key.endswith(".bias"):
+                    logger.debug(f"[兼容迁移] 丢弃旧权重的 bias 项: {key} → up{idx}")
+                    continue
+
+            migrated[new_key] = value
+
+        logger.info(
+            f"[兼容迁移] 旧权重重命名完成："
+            f"原始 {len(state_dict)} key → 迁移后 {len(migrated)} key "
+            f"（丢弃 {len(state_dict) - len(migrated)} 个 bias / 不匹配 key）"
+        )
+        return migrated
 
     def infer(self, jpeg_bytes: bytes) -> Optional[Tuple[np.ndarray, int, int]]:
         """
@@ -102,6 +177,14 @@ class RebarPredictor:
               - height: 原图高度（像素）
             失败: None（异常已记录到日志）
         """
+        # 降级模式（weights 不兼容）：直接返回 None，日志记录原因（人工在 journalctl 查看）
+        if self._degraded:
+            logger.warning(
+                f"[降级模式] 拒绝推理请求：{self._degraded_reason} | "
+                f"需人工对齐 UnetModel 结构与权重后重新加载"
+            )
+            return None
+
         t_start = time.time()
         try:
             # 1. 解码 JPEG
@@ -234,5 +317,5 @@ class RebarPredictor:
 
     @property
     def is_ready(self) -> bool:
-        """推理器是否就绪（模型已加载）"""
-        return hasattr(self, '_model') and self._model is not None
+        """推理器是否就绪（模型已加载且未处于降级模式）"""
+        return hasattr(self, '_model') and self._model is not None and not self._degraded

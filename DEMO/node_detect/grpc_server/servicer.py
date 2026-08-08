@@ -44,12 +44,12 @@ class RebarInferenceServicer(pb2_grpc.RebarInferenceServicer):
       - Shutdown: A→B 退出通知的接收端（同理）
     """
 
-    def __init__(self, predictor: RebarPredictor, state_machine: StateMachine) -> None:
+    def __init__(self, predictor: Optional[RebarPredictor], state_machine: StateMachine) -> None:
         """
         初始化 Servicer。
 
         Args:
-            predictor: 已加载权重的推理器实例
+            predictor: 已加载权重的推理器实例（可为 None — 降级模式，推理 RPC 返回空结果）
             state_machine: 状态机实例（管理 IDLE/INFERENCING/RETURNING/SHUTDOWN）
         """
         super().__init__()
@@ -113,18 +113,31 @@ class RebarInferenceServicer(pb2_grpc.RebarInferenceServicer):
         try:
             mask, width, height = None, 0, 0
 
-            # 状态转换到 RETURNING（后处理态）— 在 predictor.infer 内部完成推理
-            result = self._predictor.infer(request.image)
-
-            if result is not None:
-                mask, width, height = result
-                self._infer_count += 1
-                logger.debug(
-                    f"[Infer] 推理成功: mask={width}x{height}, "
-                    f"累计推理={self._infer_count}"
+            # 降级模式检查：predictor 为 None 或未就绪（模型加载失败/降级）时，拒绝推理但服务不崩溃
+            if self._predictor is None:
+                logger.error(
+                    f"[Infer] 节点处于降级模式（predictor 为 None，模型未加载），拒绝 frame_id={frame_id}"
                 )
+                mask, width, height = None, 0, 0
+            elif not self._predictor.is_ready:
+                logger.error(
+                    f"[Infer] predictor 未就绪（is_ready=False，可能 state_dict 未完全加载），"
+                    f"拒绝 frame_id={frame_id}"
+                )
+                mask, width, height = None, 0, 0
             else:
-                logger.error(f"[Infer] predictor 返回 None（frame_id={frame_id}）")
+                # 状态转换到 RETURNING（后处理态）— 在 predictor.infer 内部完成推理
+                result = self._predictor.infer(request.image)
+
+                if result is not None:
+                    mask, width, height = result
+                    self._infer_count += 1
+                    logger.debug(
+                        f"[Infer] 推理成功: mask={width}x{height}, "
+                        f"累计推理={self._infer_count}"
+                    )
+                else:
+                    logger.error(f"[Infer] predictor 返回 None（frame_id={frame_id}）")
 
         except Exception as e:
             logger.error(f"[Infer] 推理异常: {e}", exc_info=True)

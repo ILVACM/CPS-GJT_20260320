@@ -34,6 +34,12 @@ CONFIG_DIR: Path = BASE_DIR / "config"
 LOGS_DIR: Path = BASE_DIR / "logs"
 WEIGHTS_DIR: Path = BASE_DIR / "weights"
 
+# 显式将项目根目录加入 sys.path，确保 systemd / 不同启动方式下
+# `from proto import ...` / `from system.xxx import ...` 等绝对导入均可解析
+# （对齐 AGENTS.md §7.2 启动流程；与 node_server/system/bootstrap.py 保持一致）
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
 
 # ============================================================
 # 全局引用（main.py 生命周期内持有）
@@ -102,6 +108,17 @@ def cmd_run(args: argparse.Namespace) -> int:
         run_self_check(config, strict_admin=False)
     except SelfCheckError as e:
         logger.critical(f"[自检] 失败 — 安全退出: {e}")
+        # IP 不匹配时给出明确修复指引（对齐 AGENTS.md §4.2）
+        err_msg = str(e)
+        if "IP" in err_msg or "ip" in err_msg:
+            logger.critical("=" * 60)
+            logger.critical("修复指引：本机 IP 与配置 local_ip 不一致")
+            logger.critical("=" * 60)
+            logger.critical("请执行以下命令自动配置静态 IP（详见 QUICKSTART.md §5.3）：")
+            logger.critical("  sudo /opt/node_detect/.venv/bin/python /opt/node_detect/main.py setup-network")
+            logger.critical("  或：sudo bash /opt/node_detect/scripts/setup_network.sh")
+            logger.critical("配置完成后重启服务：sudo systemctl restart node-detect-inference")
+            logger.critical("=" * 60)
         return 1
 
     # ---- 4. 加载推理权重 ----
@@ -116,12 +133,22 @@ def cmd_run(args: argparse.Namespace) -> int:
             model_path=str(model_path),
             use_cuda=config.use_cuda,
         )
+        # predictor 即使加载失败也已降级为 _degraded=True（不崩溃）；此处进一步捕获极端异常（如 CUDA 不可用）
+        if not _predictor.is_ready:
+            logger.warning(
+                f"[模型] predictor 未完全就绪（降级模式），gRPC 仍将启动但推理返回空 | "
+                f"请用 `sudo journalctl -u node-detect-inference -f` 查看原因"
+            )
     except FileNotFoundError as e:
-        logger.critical(f"[模型] 权重文件不存在: {e}")
-        return 1
-    except RuntimeError as e:
-        logger.critical(f"[模型] PyTorch 加载失败: {e}")
-        return 1
+        # 权重文件不存在 → 不致命：降级启动（仍响应心跳/不阻塞服务）
+        logger.error(f"[模型] 权重文件不存在（降级启动）: {e}")
+        logger.error("请用 `sudo journalctl -u node-detect-inference -f` 查看详细原因，修复后重启服务")
+        _predictor = None
+    except Exception as e:
+        # PyTorch 不可用 / state_dict 迁移失败 / OOM 等 → 降级启动
+        logger.error(f"[模型] 加载异常（降级启动）: {e}", exc_info=True)
+        logger.error("请用 `sudo journalctl -u node-detect-inference -f` 查看详细原因，修复后重启服务")
+        _predictor = None
 
     # ---- 5. 状态转换: INIT → IDLE ----
     _state_machine.transition(NodeState.IDLE)
@@ -261,8 +288,24 @@ def cmd_self_check(args: argparse.Namespace) -> int:
             return 0
     except Exception as e:
         print(f"[自检] ✗ 失败: {e}")
+        # IP 不匹配时给出明确修复指引（对齐 AGENTS.md §4.2）
+        err_msg = str(e)
+        if "IP" in err_msg or "ip" in err_msg:
+            print("[自检] 修复指引：本机 IP 与配置 local_ip 不一致，请执行：")
+            print("  sudo /opt/node_detect/.venv/bin/python /opt/node_detect/main.py setup-network")
+            print("  或：sudo bash /opt/node_detect/scripts/setup_network.sh")
+            print("配置完成后重启服务：sudo systemctl restart node-detect-inference")
         return 1
     return 0
+
+
+def cmd_setup_network(args: argparse.Namespace) -> int:
+    """子命令 setup-network：配置本机静态 IP（需 sudo，独立工具）。
+
+    详见 QUICKSTART.md §5.3。
+    """
+    from system.network_setup import run_setup_network
+    return run_setup_network()
 
 
 # ============================================================
@@ -387,6 +430,11 @@ def build_parser() -> argparse.ArgumentParser:
         "self-check", help="执行启动环境自检（不启动服务）"
     )
 
+    # setup-network：配置静态 IP（独立工具，需 sudo，详见 QUICKSTART.md §5.3）
+    sub_setup_net = subparsers.add_parser(
+        "setup-network", help="配置本机静态 IP（需 sudo，独立工具）"
+    )
+
     return parser
 
 
@@ -410,6 +458,7 @@ def main(argv: Optional[list] = None) -> int:
         "stop": cmd_stop,
         "install": cmd_install,
         "self-check": cmd_self_check,
+        "setup-network": cmd_setup_network,
     }
 
     handler = dispatch.get(args.command)

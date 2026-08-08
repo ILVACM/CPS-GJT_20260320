@@ -6,7 +6,7 @@
 
 ```
 node_detect/
-├── main.py                          启动入口（6 个子命令）
+├── main.py                          启动入口（7 个子命令：run/start/status/stop/install/self-check/setup-network）
 ├── config/
 │   ├── network.json                 网络参数（IP/端口/心跳配置）
 │   ├── inference.json               推理参数（模型路径/尺寸/CUDA）
@@ -48,18 +48,28 @@ uv sync
 export UV_HTTP_TIMEOUT=600
 export UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 
+# 批量测试 source/ 下所有 whl 的 CUDA 兼容性（推荐先跑一遍再部署）
+bash scripts/test_torch_whl.sh --source-dir source/
+
 # 如需单独安装 Jetson 专用 PyTorch wheel，参考 QUICKSTART.md §2.2
 # 一键部署脚本支持 --aliyun 参数临时启用阿里云源，详见 QUICKSTART.md §四
 ```
+
+> **⚠️ Jetson whl 文件名校验说明**：NVIDIA 官方的 PyTorch wheel 文件名
+> 含完整 JetPack 构建号（如 `nv24.7.16234504`），但内部 METADATA 版本号
+> 简化为 `nv24.7`，导致 `uv` 默认校验报 `Wheel version does not match filename`。
+> 这是 NVIDIA 的打包惯例而非损坏，`deploy_node_detect.sh` 与 `test_torch_whl.sh`
+> 安装 whl 时均已自动设置 `UV_SKIP_WHEEL_FILENAME_CHECK=1` 跳过文件名校验，
+> 无需人工干预。
 
 ### 3. 编译 proto（首次或 proto 更新时）
 
 ```bash
 cd node_detect
 uv run python -m grpc_tools.protoc \
-    --proto_path=proto \
-    --python_out=proto \
-    --grpc_python_out=proto \
+    --proto_path=. \
+    --python_out=. \
+    --grpc_python_out=. \
     proto/rebar_inference.proto
 ```
 
@@ -81,9 +91,15 @@ uv run python -m grpc_tools.protoc \
   "remote_ip": "192.168.10.1",
   "grpc_port": 50051,
   "heartbeat_interval_seconds": 5,
-  "heartbeat_timeout_count": 3
+  "heartbeat_timeout_count": 3,
+  "network_interface": "",
+  "netmask": "255.255.255.252"
 }
 ```
+
+> 当本机 IP 与 `local_ip` 不一致时，执行 `sudo uv run main.py setup-network` 自动备份并配置静态 IP（详见 QUICKSTART.md §5.3）。
+> - `network_interface`：留空自动检测；多网卡场景手动指定（如 `eth0`）
+> - `netmask`：默认 `/30`（双节点直连够用），可改 `/24` 接入更大子网
 
 ### 6. 运行
 
@@ -93,6 +109,9 @@ sudo uv run main.py run
 
 # 仅执行自检（不启动服务）
 sudo uv run main.py self-check
+
+# 配置本机静态 IP（IP 不匹配时使用，详见 QUICKSTART.md §5.3）
+sudo uv run main.py setup-network
 
 # 查看帮助
 sudo uv run main.py --help
@@ -156,6 +175,7 @@ NodeServerClient.send_heartbeat() ──→ 服务节点 gRPC Server :50051
 
 | 问题 | 原因 | 解决方案 |
 |------|------|----------|
+| `[自检] 本机 IP 校验失败` | 本机网卡 IP 与 `local_ip` 不一致 | 执行 `sudo uv run main.py setup-network` 自动备份 + 配置静态 IP（详见 QUICKSTART.md §5.3） |
 | 端口被占用 | 已有进程占用 50051 | 检查 `lsof -i :50051` 后 kill 或直接换端口 |
 | CUDA 不可用 | JetPy CUDA 配置问题 | 确认 JetPack 版本与 PyTorch wheel 匹配 |
 | 权重加载失败 | 模型结构与权重不匹配 | 确认 in_filters=[256,512,1024,2048]（修复过原版错误） |

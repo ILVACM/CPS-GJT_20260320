@@ -1,6 +1,16 @@
+# 服务节点 依赖清单（双轨兼容：本文件与 pyproject.toml 同步维护）
+#
+# 用途：
+#   - pyproject.toml 为主入口，被 `uv sync` 读取（生成 uv.lock 保证可复现构建）
+#   - 本文件为辅，供人工临时安装：`uv pip install -r requirements.txt`
+#
+# 维护约定：修改依赖时必须同步更新 pyproject.toml 的 [project.dependencies]
 opencv-python>=4.5.0
 pyserial>=3.5
 Pillow>=8.0.0
 grpcio>=1.50.0
+grpcio-tools>=1.50.0
 protobuf>=4.21.0
-numpy>=1.21.0
+# K3：pyorbbecsdk v2.1.1 与 numpy 2.x 不兼容，须锁定 <2.0
+# 注：pyorbbecsdk 走本地 wheel 安装（仅 Linux ARM64），不入 requirements
+numpy>=1.21.0,<2.0

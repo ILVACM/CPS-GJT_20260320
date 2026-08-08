@@ -1,0 +1,16 @@
+{
+  "device_path": "",
+  "auto_scan": true,
+  "vid_whitelist": [6790],
+  "pid_whitelist": [21972, 21973],
+  "description_keywords": ["serial", "usb", "ch91", "ch340", "ch9102", "wch", "usb single serial", "s21c"],
+  "path_prefix_whitelist": ["/dev/ttyUSB", "/dev/ttyACM"],
+  "path_prefix_blacklist": ["/dev/ttyAMA", "/dev/ttyS", "/dev/ttyconsole"],
+  "baudrate": 115200,
+  "select_first_when_multiple": true,
+  "reconnect_interval_seconds": 3.0,
+  "max_reconnect_attempts": 5,
+  "max_age_seconds": 2.0,
+  "usb_unstable_threshold": 5,
+  "scan_interval_seconds": 2.0
+}

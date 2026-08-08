@@ -39,6 +39,9 @@ class AppConfig:
     grpc_port: int = 50051          # gRPC 监听端口
     heartbeat_interval_seconds: int = 5     # 心跳间隔（秒）
     heartbeat_timeout_count: int = 3        # 心跳超时次数
+    # 以下两字段供 setup-network 子命令使用（对齐 AGENTS.md §4.2，详见 QUICKSTART.md §5.3）
+    network_interface: str = ""     # 指定网卡名；留空时 setup-network 自动检测物理网卡
+    netmask: str = "255.255.255.252"  # 子网掩码；/30 双节点直连够用，/24 更通用
 
     # ---- inference.json 段 ----
     model_path: str = ""            # 权重文件绝对路径
@@ -62,6 +65,8 @@ class AppConfig:
             "grpc_port": self.grpc_port,
             "heartbeat_interval_seconds": self.heartbeat_interval_seconds,
             "heartbeat_timeout_count": self.heartbeat_timeout_count,
+            "network_interface": self.network_interface,
+            "netmask": self.netmask,
             "model_path": self.model_path,
             "input_width": self.input_width,
             "input_height": self.input_height,

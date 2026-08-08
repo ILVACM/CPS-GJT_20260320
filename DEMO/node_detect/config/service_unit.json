@@ -7,5 +7,6 @@
   "restart_sec": 5,
   "user": "root",
   "after": "network.target",
-  "wanted_by": "multi-user.target"
+  "wanted_by": "multi-user.target",
+  "environment": "PYTHONPATH=/opt/node_detect"
 }

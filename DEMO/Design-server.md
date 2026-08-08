@@ -37,9 +37,9 @@
 | 触发条件 | 用户以 `root` / `sudo` 执行 `main.py` 启动程序 |
 | 前置状态 | 程序未运行 |
 | 行为 | ① **第一步：读取加载 JSON 配置**（`config/*.json`，统一 `json` 模块解析）<br>② **第二步：环境权限检查**（管理员/root 权限验证、网络配置权限、gRPC 端口可用性，详见 §5）<br>③ 软硬件前置：对端检测节点 可达性 TCP 探测 |
-| 状态流转 | 通过 → 进入 0.2；硬故障（本机 IP 不匹配 / 端口冲突 / 非 root）→ 记录日志 + 抛异常 + **安全退出**；软故障（对端 A 不可达）→ **降级模式**（仅视频 + 激光），不退出 |
+| 状态流转 | 通过 → 进入 0.2；网络相关（本机 IP 不匹配 / 端口冲突 / 对端 A 不可达）均为**诊断日志，不退出**（由 NetworkMonitor 运行时监测，见 §5）；仅配置文件加载失败 → CRITICAL + 安全退出 |
 
-> **硬故障 vs 软故障**：本机 IP 不匹配、端口冲突、非管理员权限属于**环境配置错误**（硬故障），必须退出；对端节点不可达属于**服务暂时不可用**（软故障），允许降级运行（界面提示"推理服务离线"）。详见 §5。
+> **网络硬故障已放开**：本次迭代将本机 IP 不匹配、端口冲突、对端节点不可达**全部改为诊断模式**（仅记录日志，不退出启动），由 `NetworkMonitor` 后台周期探测接管动态监测。对端不可达 / 网络异常时系统进入**降级模式**（仅视频 + 激光 + 本地测量/保存，识别按钮禁用），网络恢复后自动切回在线。仅配置文件加载失败等真正致命错误才 `sys.exit(1)`。详见 §5。
 
 ### 0.2 摄像头初始化阶段
 
@@ -1056,11 +1056,16 @@ from common.constants import SERIAL_BAUDRATE
 class SerialManager:
     """
     串口设备管理类。
-    封装端口打开、后台读取、帧解析、数据获取与重连。
+    封装设备自动扫描、端口打开、后台读取、帧解析、数据获取与热插拔重连。
+    - 热插拔持续扫描：start_scanning() 启动后台 _scan_daemon 线程，
+      以 scan_interval_seconds 周期 auto_detect()，发现 S21C 即自动 open_port。
+    - 无限重连：断线后自动重新扫描重连（含换 USB 接口导致节点路径变化），
+      不再受 max_reconnect_attempts 上限约束（该字段已弃用）。
     """
 
-    def __init__(self, baudrate: int = SERIAL_BAUDRATE, timeout: float = 0.1):
-        self._baudrate = baudrate
+    def __init__(self, cfg: SerialConfig, timeout: float = 0.1):
+        self._cfg = cfg
+        self._baudrate = cfg.baudrate
         self._timeout = timeout
         self._serial_conn: Optional[serial.Serial] = None
         self._port_name: str = ""
@@ -1070,9 +1075,10 @@ class SerialManager:
         self._latest_result: Optional[LaserParseResult] = None
         self._data_timestamp: float = 0.0
         self._read_thread: Optional[threading.Thread] = None
+        self._scan_thread: Optional[threading.Thread] = None  # 热插拔扫描线程
+        self._scan_interval: float = cfg.scan_interval_seconds  # 扫描周期（默认 2.0s）
         self._reconnect_attempts: int = 0
-        self._max_reconnect_attempts: int = 5
-        self._reconnect_interval: float = 3.0
+        # 已弃用：max_reconnect_attempts 不再作重连上限（热插拔无限重连），兼容旧配置保留
 
     def open_port(self, port_name: str) -> Tuple[bool, str]:
         """打开指定串口并启动后台读取线程。"""
@@ -1106,13 +1112,15 @@ class SerialManager:
         #     return self._latest_result, self._data_timestamp
         return None, 0.0
 
+    def start_scanning(self) -> None:
+        """启动热插拔持续扫描线程（幂等）。"""
+        # 以 scan_interval_seconds 周期 auto_detect()，发现设备即 open_port；
+        # 由 _scan_daemon 单一线程驱动，避免扫描与重连并发 open_port 竞态
+
     def try_reconnect(self) -> bool:
-        """断线重连。"""
-        # if self._reconnect_attempts >= self._max_reconnect_attempts: return False
-        # self._reconnect_attempts += 1
-        # time.sleep(self._reconnect_interval)
-        # ok, _ = self.open_port(self._port_name)
-        # return ok
+        """断线重连：重新自动扫描（支持热插拔换接口/路径），无限重试。"""
+        # 注意：热插拔模式下不设 max_reconnect_attempts 上限；
+        # 断线后 _scan_daemon 持续 auto_detect()，发现设备即自动 open_port
         return False
 
     def _read_loop(self):
@@ -2911,24 +2919,27 @@ root.mainloop()
 
 | 检查项 | 检查逻辑 | 硬/软故障 | 失败处理 |
 |--------|----------|-----------|----------|
-| 管理员权限验证 | 检查当前进程是否以 `root`/`sudo` 启动（`os.geteuid() == 0`） | **硬**（条件性） | 非 root 且需特权操作（注册系统服务、绑定特权端口 < 1024）时记录 ERROR 日志 + `sys.exit(1)`；仅运行无特权操作时降级为 WARNING 继续 |
-| 本机 IP 校验 | 获取网卡实际 IP 与 `network.json.local_ip` 对比（Windows bypass） | **硬** | 记录 ERROR 日志 + `sys.exit(1)` |
-| 端口可用性 | 尝试 bind `0.0.0.0:grpc_port` | **硬** | 记录 ERROR 日志 + `sys.exit(1)` |
+| 管理员权限验证 | 检查当前进程是否以 `root`/`sudo` 启动（`os.geteuid() == 0`） | **软**（条件性） | 仅配置加载 / 端口绑定等真正需特权时才影响；原型阶段非 root 记 WARNING 不退出 |
+| 本机 IP 校验 | 获取网卡实际 IP 与 `network.json.local_ip` 对比（Windows bypass） | **诊断** | 记录 `[诊断]` 日志，**不退出**，交由 NetworkMonitor 持续监测 |
+| 端口可用性 | 尝试 bind `0.0.0.0:grpc_port` | **诊断** | 记录 `[诊断]` 日志，**不退出**（本地功能正常，推理可能受限） |
 | 网络配置权限 | 检查应用层是否具备读取/校验网络配置的权限（如读取网卡 IP、bind 端口等） | **软** | 记录 WARNING 日志 + 告警提示"网络配置权限缺失，部分检查可能不可靠" + 继续 |
-| 对端可达性 | TCP 探测 `remote_ip:grpc_port`（2 秒超时） | **软** | 记录 WARNING 日志 + 进入降级模式 + UI 黄色横幅提示 |
+| 对端可达性 | TCP 探测 `remote_ip:grpc_port`（2 秒超时） | **软** | 记录 WARNING 日志 + 进入降级模式 + UI 黄色横幅提示；由 NetworkMonitor 后台周期探测恢复 |
+
+> **说明**：本次迭代将原"硬故障"（本机 IP 不匹配 / 端口冲突 / 非 root）**全部放开为诊断/软故障**，不再 `sys.exit(1)` 退出，由运行时 `NetworkMonitor` 动态监测接管（见 §4.3 与 Design-NodeA 服务端对应）。仅配置文件加载失败等真正致命错误才退出。
 
 ### 5.3 降级模式行为
 
-当检测节点 不可达（启动自检失败，或运行中健康检查检测到丢失）时，进入降级模式：
+当检测节点 不可达（网络异常 / 启动自检失败 / 运行中健康检查检测到丢失）时，进入降级模式：
 
 | 能力 | 正常模式 | 降级模式 |
 |------|----------|----------|
 | 视频预览 | 有（30fps） | 有（30fps） |
 | 激光数据显示 | 有 | 有 |
-| AI 推理 | 有（gRPC 到检测节点） | 无 |
-| 钢筋直径测量 | 推理 + 测量 | 无（提示"推理服务离线"） |
+| 本地测量/显示/保存 | 有 | **有**（本地功能不受网络影响） |
+| AI 推理 | 有（gRPC 到检测节点） | 无（识别按钮禁用） |
+| 钢筋直径测量（依赖掩码） | 推理 + 测量 | 无新推理（提示"推理服务离线"） |
 | 融合策略选择 | CLI 可用 | CLI 可用 |
-| 恢复机制 | — | 健康检查恢复后自动退出降级模式 |
+| 恢复机制 | — | **NetworkMonitor / 健康检查自动恢复**：对端网络恢复后周期探测命中，自动切回在线模式（无需重启） |
 
 ### 5.4 平台兼容处理
 

@@ -23,6 +23,11 @@
 
 set -euo pipefail
 
+# 兜底：nounset(-u) 模式下引用未定义变量会报 unbound variable 并退出。
+# Jetson 默认 shell 环境可能不含 LD_LIBRARY_PATH，第 311 行拼接 CUDA 库路径时
+# 会被 set -u 拦截。此处用 ${var:-} 展开为空字符串避免报错。
+LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
+
 # ------------------------------------------------------------------------------
 # 全局变量
 # ------------------------------------------------------------------------------
@@ -57,7 +62,7 @@ APT_OPTS=""              # apt 额外选项（--aliyun 时填充 -o Dir::Etc::so
 # ------------------------------------------------------------------------------
 # 逻辑包名 → 实际包名映射表
 # Debian 系（Ubuntu/Debian）使用 DEB 包名；RHEL 系（openEuler/CentOS/RHEL）使用 RPM 包名
-# 注：libgthread 在 RHEL 系无独立包，libgthread-2.0.so.0 由 glib2 主包提供（映射为空字符串=跳过）
+# 注：libgthread-2.0.so.0 在 Debian/RHEL 均由 glib2 主包提供（无独立包，映射为空字符串=跳过）
 # 注：nvidia-jetpack 仅 Ubuntu/Jetson 有，RHEL 系映射为空（Jetson 实际仅 Ubuntu）
 declare -A DEB_PKG_MAP=(
     [opengl]="libgl1"
@@ -70,7 +75,7 @@ declare -A DEB_PKG_MAP=(
     [libxrender]="libxrender1"
     [libxtst]="libxtst6"
     [libxi]="libxi6"
-    [libgthread]="libgthread2.0-0"
+    [libgthread]=""                       # glib2 已含 libgthread-2.0.so.0，无需独立安装
     [gtk2]="libgtk2.0-0"
     [gtk3]="libgtk-3-0"
     [gtk2-dev]="libgtk2.0-dev"
@@ -78,8 +83,8 @@ declare -A DEB_PKG_MAP=(
     [build-essential]="build-essential"
     [pkg-config]="pkg-config"
     [python-dev]="python3-dev"
-    [kernel-dev]="linux-headers-$(uname -r)"
-    [nvidia-jetpack]="nvidia-jetpack"
+    [kernel-dev]=""                       # 原型阶段无需编译内核模块；Jetson 定制内核无独立 headers 包
+    [nvidia-jetpack]=""                   # nvidia-jetpack 通常由 JetPack 镜像预装，apt 无独立包
     [sudo]="sudo"
 )
 
@@ -380,20 +385,52 @@ log_info "✓ 系统级依赖安装完成"
 # ==============================================================================
 log_step "步骤 4/9：安装 uv 工具链"
 
-# 检查是否已安装
-if command -v uv &> /dev/null; then
-    UV_VERSION=$(uv --version | awk '{print $2}')
-    log_info "✓ uv 已安装：$UV_VERSION"
+# QUICKSTART.md §二：uv 未安装时使用官方脚本安装；安装后需 PATH 生效且通过 uv --version 验证
+# 注：sudo bash 会触发 env_reset 重置 PATH，官方脚本默认装到 ~/.local/bin，所以
+#     先主动探测常见位置（而非仅依赖 command -v，避免因 PATH 重置误判为未安装）
+_uv_path=""
+if command -v uv &>/dev/null; then
+    _uv_path="$(command -v uv)"
+elif [[ -x "${HOME}/.local/bin/uv" ]]; then
+    _uv_path="${HOME}/.local/bin/uv"
+elif [[ -x "/root/.local/bin/uv" ]]; then
+    _uv_path="/root/.local/bin/uv"
+fi
+
+# 已安装 → 验证可执行后跳过
+if [[ -n "${_uv_path}" ]] && "${_uv_path}" --version &>/dev/null; then
+    UV_VERSION="$("${_uv_path}" --version | awk '{print $2}')"
+    log_info "✓ uv 已安装：${UV_VERSION}（${_uv_path}）"
 else
-    log_info "通过官方脚本安装 uv..."
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    # 激活环境
-    export PATH="$HOME/.local/bin:$PATH"
-    if ! command -v uv &> /dev/null; then
-        log_error "uv 安装失败"
+    # 未安装 → 使用 QUICKSTART 官方脚本安装（已安装的 uv 会被脚本自动识别，幂等）
+    log_info "通过官方脚本安装 uv（curl -LsSf https://astral.sh/uv/install.sh | sh）..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh || {
+        log_error "uv 安装脚本非正常退出"
+        exit 1
+    }
+    # 官方安装脚本将 uv 写入 $HOME/.local/bin；sudo 下 $HOME 可能漂移，需多路径重定位
+    _uv_path=""
+    for _try_uv in "${HOME}/.local/bin/uv" "/root/.local/bin/uv"; do
+        if [[ -x "${_try_uv}" ]]; then
+            _uv_path="${_try_uv}"
+            break
+        fi
+    done
+    # QUICKSTART.md §二明确要求：ARM64 平台确认 uv --version 能执行
+    if [[ -z "${_uv_path}" ]] || ! "${_uv_path}" --version &>/dev/null; then
+        log_error "uv 安装失败：安装完成后仍无法找到可执行的 uv"
+        log_error "排错建议：① 重开终端或 hash -r 刷新 shell 缓存；② 手动执行 source ~/.bashrc；"
+        log_error "          ③ 手动验证 ls -l ~/.local/bin/uv 与 ~/.local/bin/uv --version"
         exit 1
     fi
-    log_info "✓ uv 安装完成：$(uv --version)"
+    UV_VERSION="$("${_uv_path}" --version | awk '{print $2}')"
+    log_info "✓ uv 安装完成：${UV_VERSION}（${_uv_path}）"
+fi
+
+# 导出 PATH 至当前 shell，使后续步骤（uv venv / uv sync）可直接调用 uv（QUICKSTART 依赖行为）
+_uv_dir="${_uv_path%/*}"
+if [[ ":${PATH}:" != *":${_uv_dir}:"* ]]; then
+    export PATH="${_uv_dir}:${PATH}"
 fi
 
 # uv 镜像源：默认尊重系统/uv 现有配置；--aliyun 时已在 setup_aliyun_mirror() 中临时 export
@@ -413,44 +450,99 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 mkdir -p "$INSTALL_DIR"
-log_info "复制项目文件..."
+log_info "复制项目文件（覆盖已有配置，代码目录为单一配置源）..."
 cp -r "$PROJECT_DIR"/* "$INSTALL_DIR/"
 # 清理可能的 __pycache__ 与 logs
 find "$INSTALL_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 rm -rf "$INSTALL_DIR/logs" 2>/dev/null || true
 
-log_info "✓ 代码已部署到 $INSTALL_DIR"
+log_info "✓ 代码与配置已部署到 $INSTALL_DIR（同名配置文件已强制覆盖）"
 
 cd "$INSTALL_DIR"
 
 # ==============================================================================
-# 步骤 6：创建 uv 虚拟环境并安装依赖
+# 步骤 6：创建 uv 虚拟环境（强制覆盖重建）并安装依赖
 # ==============================================================================
-log_step "步骤 6/9：创建 uv 虚拟环境并安装依赖"
+log_step "步骤 6/9：创建 uv 虚拟环境（强制覆盖重建）并安装依赖"
 
-log_info "创建 Python $PYTHON_VERSION 虚拟环境..."
-uv venv --python "$PYTHON_VERSION"
-log_info "✓ 虚拟环境已创建：$INSTALL_DIR/.venv"
+# 强制覆盖重建：无条件删除已有 .venv 目录并重新创建（对齐 node_server §步骤 7"无情模式"）
+log_info "强制覆盖重建 uv 虚拟环境: $INSTALL_DIR/.venv"
+if [[ -d "$INSTALL_DIR/.venv" ]]; then
+    log_warn "⚠️ 检测到已存在的 .venv 目录，正在强制删除并重建..."
+    rm -rf "$INSTALL_DIR/.venv"
+    log_info "  已删除旧环境：$INSTALL_DIR/.venv"
+fi
+# 双重保险：使用 --clear 参数让 uv 强制清除残留（无交互）
+uv venv --python "$PYTHON_VERSION" --clear
+log_info "✓ 虚拟环境已重建：$INSTALL_DIR/.venv（Python $PYTHON_VERSION）"
 
 log_info "安装 Python 依赖（uv sync）..."
-log_warn "⚠️ PyTorch 不会从 PyPI 自动安装（需 Jetson 专用 wheel）"
-log_warn "   如 uv sync 卡死在 torch，请用 Ctrl+C 中断后执行："
-log_warn "   uv sync --no-deps"
-log_warn "   然后按 QUICKSTART §2.2 单独安装 Jetson PyTorch wheel"
+log_warn "⚠️ torch/torchvision 不在 requirements 中（通过后续 Jetson whl 安装）"
 
-# 尝试 uv sync，允许 torch 失败（用户可后续手动安装）
-set +e
-uv sync
-SYNC_EXIT=$?
-set -e
-
-if [[ $SYNC_EXIT -ne 0 ]]; then
-    log_warn "uv sync 退出码 $SYNC_EXIT（可能是 torch 安装失败）"
-    log_warn "请按 QUICKSTART §2.2 手动安装 Jetson 专用 PyTorch wheel"
-    log_warn "安装完成后重新运行本脚本，或手动执行后续步骤"
+# 校验 pyproject.toml 存在（uv 项目模式必需）
+if [[ ! -f "$INSTALL_DIR/pyproject.toml" ]]; then
+    log_error "pyproject.toml 不存在：$INSTALL_DIR/pyproject.toml"
+    log_error "请确认部署代码完整（含 pyproject.toml 与 requirements.txt）"
+    exit 1
 fi
 
-log_info "✓ Python 依赖处理完成"
+# 直接 uv sync，失败即退出（torch 已不在 requirements 中，不会卡死）
+uv sync || {
+    log_error "uv sync 失败（退出码 $？）"
+    log_error "排错：① 系统依赖是否安装（步骤 3）；② pyproject.toml 语法是否正确；③ 网络是否可达"
+    exit 1
+}
+log_info "✓ Python 依赖安装完成（uv.lock 已生成/更新）"
+
+# ---- Jetson 专用 PyTorch 安装（必须在 uv sync 之后）----
+# requirements.txt 中 torch/torchvision 已注释，此处通过 NVIDIA 本地 whl 安装
+# whl 路径：node_detect/source/torch-*-cp310-cp310-linux_aarch64.whl
+TORCH_WHL="$(ls "$INSTALL_DIR"/source/torch-*-cp310-cp310-linux_aarch64.whl 2>/dev/null | head -1)"
+if [[ -n "$TORCH_WHL" && -f "$TORCH_WHL" ]]; then
+    log_info "安装 Jetson 专用 PyTorch wheel: $TORCH_WHL"
+    log_warn "⚠️ 首次安装 PyTorch whl 可能需要 5-15 分钟（Jetson Nano CPU 编译部分依赖）..."
+    # NVIDIA 定制 torch whl 文件名含简写版本号，内部 metadata 含 JetPack 构建号，需跳过 uv 版本校验
+    UV_SKIP_WHEEL_FILENAME_CHECK=1 uv pip install "$TORCH_WHL" || {
+        log_error "PyTorch whl 安装失败"
+        log_error "排错：① 检查 whl 文件名是否匹配 JetPack 版本；② 检查 https://docs.nvidia.com/deeplearning/frameworks/install-pytorch-jetson-platform/index.html"
+        exit 1
+    }
+    # 验证 CUDA 可用
+    if uv run python -c "import torch; assert torch.cuda.is_available(), 'CUDA 不可用'; print('torch OK, CUDA device:', torch.cuda.get_device_name(0))" 2>/dev/null; then
+        log_info "✓ PyTorch + CUDA 安装验证通过"
+    else
+        log_error "PyTorch 已安装但 CUDA 不可用"
+        log_error "排错：确认 JetPack 版本与 whl 匹配；执行：uv run python -c 'import torch; print(torch.cuda.is_available())'"
+        exit 1
+    fi
+
+    # ② 防御性审计：确认 .venv 中的 torch 来自 Jetson whl、而非 PyPI cu13x 版本
+    # （PyTorch 2.13+cu130 要求驱动 > 12060，当前 Jetson 驱动 12060 必触发 "driver too old"）
+    # 注意：不能在此处使用 local（仅在函数内可用），直接赋值即可
+    torch_actual="$(uv run python -c 'import torch; print(torch.__version__)' 2>/dev/null || echo 'N/A')"
+    torch_source="$(uv run python -c 'import torch; print(torch.__file__)' 2>/dev/null || echo 'N/A')"
+    log_info "torch 来源审计: version=$torch_actual  path=$torch_source"
+    if printf '%s' "$torch_actual" | grep -qE 'cu13[0-9]'; then
+        log_error ".venv 中的 torch 含 cu13x（PyPI 版本，要求 CUDA ≥ 13.0 / 驱动 > 12060）"
+        log_error "当前 Jetson 驱动为 12060，与 cu13x 不兼容 → CUDA init 报 'driver too old'"
+        log_error "根因：pyproject.toml 中 torch 仍被列为正式依赖，`uv sync` 在 whl 之前拉取了 PyPI 版"
+        log_error "修复：确认 pyproject.toml 中 torch / torchvision 已被注释，然后重跑部署"
+        exit 1
+    fi
+
+    # ③ 同步 uv.lock，锁定 whl 安装的 torch 版本，避免下次 uv sync 重置回 PyPI 2.13
+    if [[ -f "$INSTALL_DIR/uv.lock" ]]; then
+        log_info "同步 uv.lock 中的 torch 版本记录（锁定为 Jetson whl 版本）..."
+        uv lock --upgrade-package torch 2>/dev/null || true
+        log_info "✓ uv.lock 已更新（torch 版本锁定为 Jetson whl 版本）"
+    fi
+else
+    log_error "未找到 Jetson PyTorch whl: $INSTALL_DIR/source/torch-*-cp310-cp310-linux_aarch64.whl"
+    log_error "请在 Jetson 开发机按 QUICKSTART.md §2.2 下载 whl 并放置到 node_detect/source/ 目录后重跑部署"
+    exit 1
+fi
+
+log_info "✓ Python 依赖（含 Jetson PyTorch）处理完成"
 
 # ==============================================================================
 # 步骤 7：编译 proto 文件
@@ -460,10 +552,13 @@ log_step "步骤 7/9：编译 proto 文件"
 cd "$INSTALL_DIR"
 
 log_info "使用 uv run 调用 grpcio-tools 编译 proto..."
+# 关键：--proto_path=. 让 protoc 把项目根作为 proto path，proto/rebar_inference.proto
+# 处于 proto 子包下，protoc 识别 proto 为包，生成的 _pb2_grpc.py 用包内导入
+# （from . import 或 from proto import），而非裸 import rebar_inference_pb2
 uv run python -m grpc_tools.protoc \
-    --proto_path=proto \
-    --python_out=proto \
-    --grpc_python_out=proto \
+    --proto_path=. \
+    --python_out=. \
+    --grpc_python_out=. \
     proto/rebar_inference.proto
 
 if [[ ! -f proto/rebar_inference_pb2.py || ! -f proto/rebar_inference_pb2_grpc.py ]]; then

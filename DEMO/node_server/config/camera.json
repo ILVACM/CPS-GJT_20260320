@@ -7,5 +7,20 @@
   "depth_height": 480,
   "depth_fps": 30,
   "device_index": 0,
-  "compatible_models": ["Orbbec Gemini 336L", "Orbbec Astra"]
+  "compatible_devices": [
+    {
+      "brand": "Orbbec",
+      "model": "Gemini 336L",
+      "pid": "0x0807",
+      "vid": "0x2bc5",
+      "connection_type": "USB"
+    },
+    {
+      "brand": "Orbbec",
+      "model": "Astra",
+      "pid": "0x0636",
+      "vid": "0x2bc5",
+      "connection_type": "USB"
+    }
+  ]
 }
