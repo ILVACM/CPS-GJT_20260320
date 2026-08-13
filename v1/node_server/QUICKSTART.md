@@ -3,7 +3,7 @@
 > **适用对象**：刚接手本项目的实施人员 / 部署工程师
 > **节点定位**：系统主控端（HUAWEI OrangePi KunPeng，openEuler 22 LTS）
 > **核心职责**：采集相机画面与激光测距、向检测节点 转发推理任务、执行测量换算与画面拼接、本地 GUI 显示与交互
-> **对应规范**：`AGENTS.md` §2.3 / `Design-server.md`
+> **对应规范**：`AGENTS.md` §2.3 / `docs/Design-server.md`
 > **工具链红线**：本项目统一使用 **`uv`** 作为 Python 包管理与运行工具，**严禁** `pip` / `conda` / `virtualenv` 直装
 
 ---
@@ -702,7 +702,7 @@ sudo /opt/node_server/.venv/bin/python /opt/node_server/main.py setup-network
 ## 八、参考文档
 
 - 全局规范：[`AGENTS.md`](file:///d:/swap/CPS-GJT_20260320/DEMO/AGENTS.md)
-- 服务节点 详细设计：[`Design-server.md`](file:///d:/swap/CPS-GJT_20260320/DEMO/Design-server.md)
+- 服务节点 详细设计：[`Design-server.md`](file:///d:/swap/CPS-GJT_20260320/DEMO/docs/Design-server.md)
 - 检测节点 快速启动：[`node_detect/QUICKSTART.md`](file:///d:/swap/CPS-GJT_20260320/DEMO/node_detect/QUICKSTART.md)
 - 系统服务管理脚本参数：[`config/service.json`](file:///d:/swap/CPS-GJT_20260320/DEMO/node_server/config/service.json)
 - 一键部署脚本：[`scripts/deploy_node_server.sh`](file:///d:/swap/CPS-GJT_20260320/DEMO/node_server/scripts/deploy_node_server.sh)

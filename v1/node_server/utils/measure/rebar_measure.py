@@ -1,7 +1,7 @@
 """钢筋直径与间距测量（服务节点 测量模块）。
 
 对齐 AGENTS.md §5.3（测量换算）、§8.4（分割类别定义）与 Design-server.md §3.6。
-算法源：``Z-BackUp/new-predict.py`` 的 ``RebarMeasureV53`` 类（第 504 行起），
+算法源：``temp/new-predict.py`` 的 ``RebarMeasureV53`` 类（第 504 行起），
 本模块迁移其 ``measure_from_label`` 标签路径流水线，简化直径后处理与调参逻辑。
 
 迁移要点：

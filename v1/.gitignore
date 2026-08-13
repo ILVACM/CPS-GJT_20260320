@@ -41,6 +41,10 @@ desktop.ini
 *~
 *.orig
 
+# ---- 知识库校验中间产物（_temp/）----
+# 按 AGENTS.md §10.5 / §11，校验/推测结果写入 _temp/，属临时参考不入版本控制
+_temp/
+
 # ---- proto 编译产物（保留源 .proto，编译产物可重新生成）----
 # 注：当前 node_detect/proto/ 与 node_server/proto/ 中的 *_pb2.py / *_pb2_grpc.py
 # 属于编译产物，但为方便部署暂保留入版本控制；后续若提取共享 proto，

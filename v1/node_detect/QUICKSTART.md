@@ -3,7 +3,7 @@
 > **适用对象**：刚接手本项目的实施人员 / 部署工程师
 > **节点定位**：AI 推理端（NVIDIA Jetson Nano，Ubuntu 22.04 LTS / JetPack）
 > **核心职责**：接收服务节点 发来的 RGB 图像，执行 UNet 语义分割，返回 0/1/2 类别掩码
-> **对应规范**：`AGENTS.md` §2.2 / `Design-AI_detect.md`
+> **对应规范**：`AGENTS.md` §2.2 / `docs/Design-AI_detect.md`
 > **工具链红线**：本项目统一使用 **`uv`** 作为 Python 包管理与运行工具，**严禁** `pip` / `conda` / `virtualenv` 直装
 
 ---
@@ -470,7 +470,7 @@ systemd 启动失败日志典型形态：
 ## 八、参考文档
 
 - 全局规范：[`AGENTS.md`](file:///d:/swap/CPS-GJT_20260320/DEMO/AGENTS.md)
-- 检测节点 详细设计：[`Design-AI_detect.md`](file:///d:/swap/CPS-GJT_20260320/DEMO/Design-AI_detect.md)
+- 检测节点 详细设计：[`Design-AI_detect.md`](file:///d:/swap/CPS-GJT_20260320/DEMO/docs/Design-AI_detect.md)
 - 服务节点 快速启动：[`node_server/QUICKSTART.md`](file:///d:/swap/CPS-GJT_20260320/DEMO/node_server/QUICKSTART.md)
 - 系统服务管理脚本参数：[`config/service_unit.json`](file:///d:/swap/CPS-GJT_20260320/DEMO/node_detect/config/service_unit.json)
 - 一键部署脚本：[`scripts/deploy_node_detect.sh`](file:///d:/swap/CPS-GJT_20260320/DEMO/node_detect/scripts/deploy_node_detect.sh)

@@ -83,7 +83,9 @@
 ```
 DEMO/
 ├── AGENTS.md                          # 项目总体架构规范（双节点共享）
-├── Design-AI_detect.md                # 本文档 — 检测节点 设计方案
+├── docs/
+│   ├── Design-AI_detect.md            # 本文档 — 检测节点 设计方案
+│   └── Design-server.md               # 服务节点 设计方案
 ├── node_detect/                            # 检测节点 工程根目录
 │   ├── __init__.py
 │   ├── main.py                        # 入口：启动自检 → 启动 gRPC 服务 → 阻塞等待
@@ -163,7 +165,7 @@ IMAGENET_STD: Tuple[float, float, float] = (0.229, 0.224, 0.225)
 
 ### 3.2 `inference/model.py` — UNet 模型定义
 
-> **归档说明**：`new-predict.py` 已归档至 `Z-BackUp/`，本节及后续章节中"从 `new-predict.py` 迁移"均指从归档版本迁移至 `node_detect/inference/` 模块。
+> **归档说明**：`new-predict.py` 已归档至 `temp/`，本节及后续章节中"从 `new-predict.py` 迁移"均指从归档版本迁移至 `node_detect/inference/` 模块。
 
 **设计决策**：从 `new-predict.py` 整体迁移网络定义代码（`BasicBlock`、`BottleNeck`、`ResNet`、`UNetModel` 等），不做结构修改，仅做以下调整：
 

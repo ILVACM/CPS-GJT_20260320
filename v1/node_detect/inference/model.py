@@ -1,7 +1,7 @@
 """
 UNet（ResNet50 backbone）分割模型定义。
 
-从 Z-BackUp/new-predict.py 迁移，仅保留 ResNet50 backbone 推理所需的最小网络结构。
+从 temp/new-predict.py 迁移，仅保留 ResNet50 backbone 推理所需的最小网络结构。
 
 关键修正（对齐 Design-AI_detect.md §3.2）：
   1. in_filters 修正为 ResNet50 实际输出通道数 [256, 512, 1024, 2048]
